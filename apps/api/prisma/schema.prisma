@@ -1,0 +1,384 @@
+// Mô hình dữ liệu DocsHub — xem PRD mục 7.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// ADMIN vận hành hệ thống; INSTRUCTOR được tạo khoá học; USER chỉ tham gia khoá được mời.
+enum SystemRole {
+  ADMIN
+  INSTRUCTOR
+  USER
+}
+
+enum CourseRole {
+  OWNER
+  EDITOR
+  LEARNER
+}
+
+/// Trạng thái của bản nháp làm việc. Bài vẫn hiển thị cho học viên khi có publishedRevisionId,
+/// kể cả khi bản nháp đang ở DRAFT (sửa sau khi xuất bản).
+enum DocStatus {
+  DRAFT
+  IN_REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ProgressStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+model User {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  email        String     @unique
+  name         String
+  avatarUrl    String?
+  /// Theme người dùng tự chọn, đè theme của khoá học; null = theo khoá học.
+  theme        String?
+  passwordHash String?
+  googleId     String?    @unique
+  systemRole   SystemRole @default(USER)
+  isActive     Boolean    @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  refreshTokens RefreshToken[]
+  ownedCourses  Course[]       @relation("CourseOwner")
+  memberships   CourseMember[]
+  revisions     DocRevision[]
+  progress      Progress[]
+  bookmarks     Bookmark[]
+  notes         Note[]
+  feedback      Feedback[]
+  events        Event[]
+  assets        Asset[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+/// Refresh token xoay vòng. Mỗi lần đăng nhập mở một family; token đã xoay mà bị dùng lại
+/// nghĩa là bị lộ, khi đó thu hồi cả family.
+model RefreshToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @db.Uuid
+  familyId  String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model Course {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  slug        String    @unique
+  title       String
+  description String?
+  coverUrl    String?
+  /// Theme giao diện của khoá (mint, maple, ...); null = theme mặc định của DocsHub.
+  theme        String?
+  /// Màu chính dạng #rrggbb, đè màu chính của theme; null = dùng màu của theme.
+  primaryColor String?
+  ownerId     String    @db.Uuid
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner    User           @relation("CourseOwner", fields: [ownerId], references: [id])
+  members  CourseMember[]
+  cohorts  Cohort[]
+  versions Version[]
+  assets   Asset[]
+  events   Event[]
+
+  @@map("courses")
+}
+
+model CourseMember {
+  courseId  String     @db.Uuid
+  userId    String     @db.Uuid
+  role      CourseRole
+  cohortId  String?    @db.Uuid
+  createdAt DateTime   @default(now())
+
+  course Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cohort Cohort? @relation(fields: [cohortId], references: [id], onDelete: SetNull)
+
+  @@id([courseId, userId])
+  @@index([userId])
+  @@map("course_members")
+}
+
+/// Lớp học. Học viên trong lớp mặc định đọc version được gán cho lớp.
+model Cohort {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  courseId  String    @db.Uuid
+  name      String
+  versionId String?   @db.Uuid
+  startAt   DateTime?
+  endAt     DateTime?
+  createdAt DateTime  @default(now())
+
+  course  Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  version Version?       @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  members CourseMember[]
+
+  @@unique([courseId, name])
+  @@map("cohorts")
+}
+
+model Version {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  courseId  String    @db.Uuid
+  label     String
+  slug      String
+  isCurrent Boolean   @default(false)
+  frozenAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  course     Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  categories Category[]
+  docs       Doc[]
+  cohorts    Cohort[]
+
+  @@unique([courseId, slug])
+  @@map("versions")
+}
+
+model Category {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  versionId   String   @db.Uuid
+  parentId    String?  @db.Uuid
+  label       String
+  slug        String
+  position    Int      @default(0)
+  /// Tên icon lucide, ví dụ "layers".
+  icon        String?
+  collapsed   Boolean  @default(false)
+  /// Mô tả cho trang giới thiệu tự sinh (generated index).
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  version  Version    @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children Category[] @relation("CategoryTree")
+  docs     Doc[]
+
+  @@index([versionId, parentId])
+  @@map("categories")
+}
+
+model Doc {
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  versionId           String    @db.Uuid
+  categoryId          String?   @db.Uuid
+  slug                String
+  position            Int       @default(0)
+  /// Tiêu đề của bản nháp, dùng cho cây nội dung trong Studio.
+  title               String
+  status              DocStatus @default(DRAFT)
+  /// Bản nháp làm việc: Markdown đầy đủ gồm frontmatter. Autosave ghi vào đây.
+  source              String    @default("")
+  sourceUpdatedAt     DateTime  @default(now())
+  sourceUpdatedById   String?   @db.Uuid
+  publishedRevisionId String?   @unique @db.Uuid
+  publishedAt         DateTime?
+  /// Hẹn giờ: học viên chỉ thấy bài từ thời điểm này.
+  publishAt           DateTime?
+  /// Khoá mềm khi đang soạn, hết hạn nếu không gia hạn.
+  lockedById          String?   @db.Uuid
+  lockedAt            DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  version           Version       @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  category          Category?     @relation(fields: [categoryId], references: [id], onDelete: NoAction)
+  revisions         DocRevision[] @relation("DocRevisions")
+  publishedRevision DocRevision?  @relation("PublishedRevision", fields: [publishedRevisionId], references: [id], onDelete: SetNull)
+  progress          Progress[]
+  bookmarks         Bookmark[]
+  notes             Note[]
+  feedback          Feedback[]
+  events            Event[]
+
+  @@index([versionId, categoryId])
+  @@map("docs")
+}
+
+/// Ảnh chụp bất biến của một bài. Tạo khi lưu (Ctrl+S), xuất bản hoặc khôi phục.
+model DocRevision {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  docId       String   @db.Uuid
+  number      Int
+  title       String
+  source      String
+  html        String
+  toc         Json
+  frontmatter Json
+  readingTime Int
+  wordCount   Int
+  message     String?
+  authorId    String?  @db.Uuid
+  createdAt   DateTime @default(now())
+
+  doc          Doc   @relation("DocRevisions", fields: [docId], references: [id], onDelete: Cascade)
+  publishedFor Doc?  @relation("PublishedRevision")
+  author       User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([docId, number])
+  @@map("doc_revisions")
+}
+
+model Asset {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  courseId     String   @db.Uuid
+  key          String   @unique
+  filename     String
+  mime         String
+  size         Int
+  width        Int?
+  height       Int?
+  uploadedById String?   @db.Uuid
+  /// Thời điểm xác nhận file đã có trên S3. Null = mới cấp URL upload, chưa tải xong.
+  uploadedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  course     Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([courseId])
+  @@map("assets")
+}
+
+model Progress {
+  userId       String         @db.Uuid
+  docId        String         @db.Uuid
+  status       ProgressStatus @default(IN_PROGRESS)
+  scrollPct    Int            @default(0)
+  timeSpentSec Int            @default(0)
+  completedAt  DateTime?
+  updatedAt    DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doc  Doc  @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@id([userId, docId])
+  @@index([docId])
+  @@map("progress")
+}
+
+model Bookmark {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @db.Uuid
+  docId     String   @db.Uuid
+  anchor    String
+  label     String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doc  Doc  @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, docId, anchor])
+  @@map("bookmarks")
+}
+
+model Note {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @db.Uuid
+  docId     String   @db.Uuid
+  anchor    String?
+  quote     String?
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doc  Doc  @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@index([userId, docId])
+  @@map("notes")
+}
+
+model Feedback {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @db.Uuid
+  docId     String   @db.Uuid
+  helpful   Boolean
+  comment   String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doc  Doc  @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, docId])
+  @@map("feedback")
+}
+
+/// Nguồn dữ liệu analytics. Khi bảng lớn sẽ partition theo tháng bằng migration SQL tay.
+model Event {
+  id       BigInt   @id @default(autoincrement())
+  type     String
+  userId   String?  @db.Uuid
+  courseId String?  @db.Uuid
+  docId    String?  @db.Uuid
+  payload  Json?
+  at       DateTime @default(now())
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  course Course? @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  doc    Doc?    @relation(fields: [docId], references: [id], onDelete: SetNull)
+
+  @@index([courseId, at])
+  @@index([docId, at])
+  @@map("events")
+}
+
+/// Cấu hình hệ thống do admin chỉnh (một bản ghi duy nhất, id = 1). `data` chỉ lưu phần khác mặc định;
+/// mặc định nằm trong src/settings/settings.schema.ts.
+model SystemSetting {
+  id          Int      @id @default(1)
+  data        Json     @default("{}")
+  updatedById String?  @db.Uuid
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+/// Nhật ký thao tác quản trị: đổi cấu hình, vai trò, khoá tài khoản, lưu trữ/xoá khoá học...
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  actorId    String?  @db.Uuid
+  action     String
+  targetType String?
+  targetId   String?
+  summary    String
+  meta       Json?
+  at         DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([at])
+  @@index([action, at])
+  @@map("audit_logs")
+}

@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils';
 import type { CategoryNode, CourseProgress, TreeNode } from '@/lib/api-types';
 
 const KNOWN_ICONS = new Set<string>(iconNames);
+/** Số cấp nhóm được mở sẵn trong sidebar. */
+const OPEN_DEPTH = 1;
 
 export interface SidebarNavProps {
   tree: TreeNode[];
@@ -91,7 +93,8 @@ function NodeList({ nodes, ctx, depth }: { nodes: TreeNode[]; ctx: ListContext; 
 function CategoryItem({ node, ctx, depth }: { node: CategoryNode; ctx: ListContext; depth: number }) {
   const { basePath, current } = ctx;
   const containsCurrent = current === node.path || current.startsWith(`${node.path}/`);
-  const [open, setOpen] = useState(containsCurrent || !node.collapsed);
+  // Mặc định chỉ mở nhóm cấp 1; nhóm cấp 2 trở xuống thu gọn trừ khi chứa bài đang đọc.
+  const [open, setOpen] = useState(containsCurrent || (depth < OPEN_DEPTH && !node.collapsed));
   const expanded = open || containsCurrent;
 
   return (

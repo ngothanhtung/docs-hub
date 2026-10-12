@@ -145,7 +145,7 @@ function buildFolders(project: ImportProject) {
       const children = build(sub, depth + 1);
       if (children.length === 0) continue;
       const label = meta.label ?? humanize(parsed.name);
-      if (depth >= MAX_IMPORT_DEPTH) {
+      if (depth > MAX_IMPORT_DEPTH) {
         project.warnings.push({
           message: `Thư mục "${relative(project.root, sub.path)}" lồng quá ${MAX_IMPORT_DEPTH} cấp: bài bên trong được đưa lên nhóm cha`,
           line: null,
@@ -278,7 +278,7 @@ function buildMintlify(project: ImportProject, configPath: string) {
       const key = `${parentKey}/${item.label}`;
       const children = toNodes(item.items, depth + 1, key);
       if (children.length === 0) continue;
-      if (depth >= MAX_IMPORT_DEPTH) {
+      if (depth > MAX_IMPORT_DEPTH) {
         project.warnings.push({
           message: `Nhóm "${item.label}" lồng quá ${MAX_IMPORT_DEPTH} cấp: trang bên trong được đưa lên nhóm cha`,
           line: null,

@@ -35,6 +35,27 @@ describe('nhập từ Docusaurus', () => {
     expect(project.skipped.map((s) => s.path)).toEqual(['site/docs/basics/_shared.mdx']);
   });
 
+  it('giữ đủ 3 cấp thư mục, thư mục cấp 4 được đưa lên nhóm cha', () => {
+    const project = analyzeImport([
+      text('site/docs/intro.md', '# Intro'),
+      text('site/docs/a/one.md', '# 1'),
+      text('site/docs/a/b/two.md', '# 2'),
+      text('site/docs/a/b/c/three.md', '# 3'),
+      text('site/docs/a/b/c/d/four.md', '# 4'),
+    ]);
+    expect(outline(project.nodes)).toEqual([
+      '[A] a',
+      '  [B] b',
+      '    [C] c',
+      '      four <- site/docs/a/b/c/d/four.md',
+      '      three <- site/docs/a/b/c/three.md',
+      '    two <- site/docs/a/b/two.md',
+      '  one <- site/docs/a/one.md',
+      'intro <- site/docs/intro.md',
+    ]);
+    expect(project.warnings.map((w) => w.message)).toEqual(['Thư mục "a/b/c/d" lồng quá 3 cấp: bài bên trong được đưa lên nhóm cha']);
+  });
+
   it('chuyển admonition, Tabs, details, partial; đổi link và ảnh; bỏ import/live', () => {
     const docs = convertProject(analyzeImport(files), { assetUrl: (p) => `/assets/${p}` });
     const intro = docs.find((d) => d.path === 'intro')!;
@@ -111,6 +132,30 @@ describe('nhập từ Mintlify', () => {
       '  users <- api/users.mdx',
     ]);
     expect(project.skipped.map((s) => s.path).sort()).toEqual(['GET /users', 'orphan.mdx']);
+  });
+
+  it('giữ đủ 3 cấp nhóm, nhóm cấp 4 được đưa lên nhóm cha', () => {
+    const project = analyzeImport([
+      text('docs.json', JSON.stringify({
+        navigation: [
+          { group: 'A', pages: [{ group: 'B', pages: [{ group: 'C', pages: ['c', { group: 'D', pages: ['d'] }] }] }] },
+          { group: 'E', pages: ['e'] },
+        ],
+      })),
+      text('c.mdx', '# C'),
+      text('d.mdx', '# D'),
+      text('e.mdx', '# E'),
+    ]);
+    expect(outline(project.nodes)).toEqual([
+      '[A] a',
+      '  [B] b',
+      '    [C] c',
+      '      c <- c.mdx',
+      '      d <- d.mdx',
+      '[E] e',
+      '  e <- e.mdx',
+    ]);
+    expect(project.warnings.map((w) => w.message)).toEqual(['Nhóm "D" lồng quá 3 cấp: trang bên trong được đưa lên nhóm cha']);
   });
 
   it('chuyển component Mintlify sang directive của DocsHub', () => {
